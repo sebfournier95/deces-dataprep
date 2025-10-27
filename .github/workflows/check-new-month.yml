@@ -54,23 +54,18 @@ jobs:
           API_URL="https://www.data.gouv.fr/api/1/datasets/fichier-des-personnes-decedees"
           
           echo "🔍 Vérification via API data.gouv.fr..."
-          echo "   URL: ${API_URL}"
           
-          # Télécharger la réponse avec gestion d'erreur
-          RESPONSE=$(curl -s -w "\n%{http_code}" "$API_URL")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-          BODY=$(echo "$RESPONSE" | sed '$d')
+          # Suivre les redirections avec -L
+          RESPONSE=$(curl -sL "$API_URL")
           
-          echo "   HTTP Code: ${HTTP_CODE}"
-          
-          if [ "$HTTP_CODE" != "200" ]; then
-            echo "❌ Erreur API (HTTP ${HTTP_CODE})"
+          if [ $? -ne 0 ]; then
+            echo "❌ Erreur lors de l'appel à l'API"
             echo "available=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
           # Vérifier que c'est du JSON valide
-          if ! echo "$BODY" | jq empty 2>/dev/null; then
+          if ! echo "$RESPONSE" | jq empty 2>/dev/null; then
             echo "❌ Réponse API invalide (pas du JSON)"
             echo "available=false" >> $GITHUB_OUTPUT
             exit 0
@@ -79,31 +74,29 @@ jobs:
           echo "✅ API accessible, recherche du fichier..."
           
           # Chercher .txt
-          URL_TXT=$(echo "$BODY" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt\") | .url" 2>/dev/null | head -1)
+          URL_TXT=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt\") | .url" 2>/dev/null | head -1)
           
           # Chercher .txt.gz
-          URL_GZ=$(echo "$BODY" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt.gz\") | .url" 2>/dev/null | head -1)
+          URL_GZ=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt.gz\") | .url" 2>/dev/null | head -1)
           
           if [ -n "$URL_TXT" ] && [ "$URL_TXT" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_TXT}" >> $GITHUB_OUTPUT
             echo "file_type=txt" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt"
-            echo "   URL: ${URL_TXT}"
           elif [ -n "$URL_GZ" ] && [ "$URL_GZ" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_GZ}" >> $GITHUB_OUTPUT
             echo "file_type=txt.gz" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt.gz"
-            echo "   URL: ${URL_GZ}"
           else
             echo "available=false" >> $GITHUB_OUTPUT
             echo "⏳ Pas encore disponible: ${FILE_BASE}.txt / ${FILE_BASE}.txt.gz"
             
-            # Debug: lister les 10 derniers fichiers deces
+            # Debug: lister les derniers fichiers
             echo ""
-            echo "📋 Derniers fichiers disponibles:"
-            echo "$BODY" | jq -r '.resources[] | select(.title | startswith("deces-")) | .title' 2>/dev/null | sort -r | head -10
+            echo "📋 Les 10 derniers fichiers 'deces' disponibles:"
+            echo "$RESPONSE" | jq -r '.resources[] | select(.title | startswith("deces-")) | .title' 2>/dev/null | sort -r | head -10
           fi
       
       - name: Get file info
@@ -114,8 +107,8 @@ jobs:
           
           echo "📦 Récupération des informations du fichier..."
           
-          # Récupérer la taille
-          SIZE=$(curl -sI -L "$URL" | grep -i content-length | awk '{print $2}' | tr -d '\r' | head -1)
+          # Récupérer la taille (suivre les redirections)
+          SIZE=$(curl -sIL "$URL" | grep -i content-length | awk '{print $2}' | tr -d '\r' | tail -1)
           
           if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ] 2>/dev/null; then
             SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
