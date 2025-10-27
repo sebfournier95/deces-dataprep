@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v1
       
       - name: Calculate previous month
         id: month
@@ -44,6 +44,7 @@ jobs:
             if [ "$LAST_PROCESSED" = "${{ steps.month.outputs.previous_month }}" ]; then
               echo "already_processed=true" >> $GITHUB_OUTPUT
               echo "✅ Mois ${{ steps.month.outputs.previous_month }} déjà traité"
+              exit 0
             else
               echo "already_processed=false" >> $GITHUB_OUTPUT
               echo "🔄 Nouveau mois détecté: ${{ steps.month.outputs.previous_month }}"
@@ -53,60 +54,54 @@ jobs:
             echo "🆕 Premier run, aucun mois traité précédemment"
           fi
       
-      - name: Configure project
+      - name: Create artifacts file
         if: steps.check_processed.outputs.already_processed != 'true'
         run: |
-          echo "⚙️  Configuration du projet..."
-          make config
-        env:
-          GIT_ROOT: https://github.com/sebfournier95
-          DATAGOUV_CONNECTOR: upload
+          echo "📝 Création du fichier artifacts..."
+          cat > artifacts << 'EOF'
+          export GIT_ROOT = https://github.com/sebfournier95
+          EOF
+          
+          echo "✅ Fichier artifacts créé"
+          cat artifacts
       
-      - name: Check file availability and download
-        id: check_file
+      - name: 🔍 Check and process new month data
+        id: process
         if: steps.check_processed.outputs.already_processed != 'true'
         run: |
-          FILE_NAME="${{ steps.month.outputs.file_name }}"
+          echo "🚀 Tentative de traitement du fichier ${{ steps.month.outputs.file_name }}..."
           
-          echo "🔍 Tentative de téléchargement de ${FILE_NAME}..."
-          
-          # Utiliser make datagouv-to-upload pour télécharger le fichier
-          if make datagouv-to-upload FILES_TO_PROCESS="${FILE_NAME}"; then
-            # Vérifier si le fichier a été téléchargé
-            UPLOAD_DIR="backend/upload"
+          if make clean config datagouv-to-upload FILES_TO_PROCESS=${FILES_TO_PROCESS} ; then
             
-            if [ -f "${UPLOAD_DIR}/${FILE_NAME}" ]; then
-              echo "file_available=true" >> $GITHUB_OUTPUT
-              echo "✅ Fichier téléchargé avec succès: ${FILE_NAME}"
-              
-              # Compter les lignes
-              LINE_COUNT=$(zcat "${UPLOAD_DIR}/${FILE_NAME}" | wc -l)
-              FILE_SIZE=$(du -h "${UPLOAD_DIR}/${FILE_NAME}" | awk '{print $1}')
-              
+            echo "file_available=true" >> $GITHUB_OUTPUT
+            echo "✅ Fichier traité avec succès"
+            
+            # Récupérer les statistiques
+            FILE_PATH="backend/upload/${{ steps.month.outputs.file_name }}"
+            if [ -f "$FILE_PATH" ]; then
+              LINE_COUNT=$(zcat "$FILE_PATH" | wc -l)
+              FILE_SIZE=$(du -h "$FILE_PATH" | awk '{print $1}')
               echo "line_count=${LINE_COUNT}" >> $GITHUB_OUTPUT
               echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
-              
-              echo "📊 Statistiques:"
-              echo "   Lignes: ${LINE_COUNT}"
-              echo "   Taille: ${FILE_SIZE}"
-            else
-              echo "file_available=false" >> $GITHUB_OUTPUT
-              echo "⏳ Fichier pas encore disponible: ${FILE_NAME}"
-              
-              # Lister les fichiers téléchargés pour debug
-              echo ""
-              echo "📋 Fichiers dans ${UPLOAD_DIR}:"
-              ls -lh "${UPLOAD_DIR}/" 2>/dev/null | grep "deces-" || echo "Aucun fichier deces trouvé"
+              echo "📊 ${LINE_COUNT} décès traités (${FILE_SIZE})"
             fi
           else
+            EXIT_CODE=$?
             echo "file_available=false" >> $GITHUB_OUTPUT
-            echo "❌ Échec du téléchargement via make datagouv-to-upload"
+            echo "⏳ Fichier pas encore disponible ou erreur de traitement (code: ${EXIT_CODE})"
+            
+            # Vérifier si c'est juste que le fichier n'existe pas (et non une vraie erreur)
+            if grep -q "no new file downloaded from datagouv" backend/tools/*.log 2>/dev/null; then
+              echo "ℹ️  Fichier simplement pas encore disponible"
+            fi
+            
+            exit 0  # Ne pas faire échouer le workflow
           fi
         env:
-          DATAGOUV_CONNECTOR: upload
-      
+          FILES_TO_PROCESS: ${{ steps.month.outputs.file_name }}
+          
       - name: Mark month as processed
-        if: steps.check_file.outputs.file_available == 'true'
+        if: steps.process.outputs.file_available == 'true'
         run: |
           mkdir -p .github/workflows
           echo "${{ steps.month.outputs.previous_month }}" > .github/workflows/.last_processed_month
@@ -114,31 +109,35 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/workflows/.last_processed_month
-          git commit -m "📊 Nouveau mois traité: ${{ steps.month.outputs.previous_month }}"
+          git commit -m "📊 Nouveau mois détecté et traité: ${{ steps.month.outputs.previous_month }}"
           git push
       
       - name: Send Discord notification
-        if: steps.check_file.outputs.file_available == 'true'
+        if: steps.process.outputs.file_available == 'true'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           FILE_NAME="${{ steps.month.outputs.file_name }}"
-          LINE_COUNT="${{ steps.check_file.outputs.line_count }}"
-          FILE_SIZE="${{ steps.check_file.outputs.file_size }}"
+          LINE_COUNT="${{ steps.process.outputs.line_count }}"
+          FILE_SIZE="${{ steps.process.outputs.file_size }}"
           PREVIOUS_MONTH="${{ steps.month.outputs.previous_month }}"
           PREVIOUS_MONTH_NAME="${{ steps.month.outputs.previous_month_name }}"
           CURRENT_MONTH=$(date +'%B %Y')
           
           # Formater le nombre avec des espaces
-          LINE_COUNT_FORMATTED=$(printf '%s' ${LINE_COUNT} | sed ':a;s/\B[0-9]\{3\}\>/\ &/;ta')
+          if [ -n "$LINE_COUNT" ]; then
+            LINE_COUNT_FORMATTED=$(printf '%s' ${LINE_COUNT} | sed ':a;s/\B[0-9]\{3\}\>/\ &/;ta')
+          else
+            LINE_COUNT_FORMATTED="N/A"
+          fi
           
           # Construire le payload JSON pour Discord
           PAYLOAD=$(cat <<EOF
           {
-            "content": "@here Nouveau fichier de décès disponible !",
+            "content": "@here 🎉 Nouveau fichier de décès disponible et traité !",
             "embeds": [{
-              "title": "🎉 Nouvelles données disponibles",
-              "description": "Les données de **${PREVIOUS_MONTH_NAME}** sont maintenant disponibles (nous sommes en ${CURRENT_MONTH}).",
+              "title": "📊 Nouvelles données disponibles",
+              "description": "Les données de **${PREVIOUS_MONTH_NAME}** ont été détectées et traitées avec succès (nous sommes en ${CURRENT_MONTH}).",
               "color": 3066993,
               "fields": [
                 {
@@ -158,27 +157,27 @@ jobs:
                 },
                 {
                   "name": "💾 Taille",
-                  "value": "${FILE_SIZE}",
+                  "value": "${FILE_SIZE:-N/A}",
                   "inline": true
                 },
                 {
-                  "name": "⏰ Détecté le",
+                  "name": "⏰ Traité le",
                   "value": "$(date +'%d/%m/%Y à %H:%M:%S UTC')",
                   "inline": true
                 },
                 {
-                  "name": "📦 Bucket",
-                  "value": "data.gouv.fr",
+                  "name": "✅ Statut",
+                  "value": "Données indexées dans ES (dev)",
                   "inline": true
                 },
                 {
-                  "name": "🚀 Commande à exécuter",
-                  "value": "\`\`\`bash\n./run-local-update.sh ${PREVIOUS_MONTH}\n\`\`\`",
+                  "name": "🚀 Action sur votre serveur",
+                  "value": "Lancez \`./run-local-update.sh ${PREVIOUS_MONTH}\` pour mettre à jour votre index production local",
                   "inline": false
                 }
               ],
               "footer": {
-                "text": "deces-dataprep • Détection automatique"
+                "text": "deces-dataprep • Détection et traitement automatiques"
               },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
             }]
