@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - tmp
+      - master-local
 
 jobs:
   check-availability:
