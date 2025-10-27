@@ -1,0 +1,182 @@
+name: Check new month data availability
+
+on:
+  schedule:
+    # 4 fois par jour: 00h, 6h, 12h, 18h
+    - cron: "0 0,6,12,18 * * *"
+  workflow_dispatch:
+
+jobs:
+  check-availability:
+    name: Check if previous month data is available
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Calculate previous month
+        id: month
+        run: |
+          # Calculer le mois précédent (en octobre, on cherche septembre)
+          PREVIOUS_MONTH=$(date -d "last month" +"%Y-m%m")
+          PREVIOUS_MONTH_NAME=$(date -d "last month" +"%B %Y")
+          
+          echo "previous_month=${PREVIOUS_MONTH}" >> $GITHUB_OUTPUT
+          echo "previous_month_name=${PREVIOUS_MONTH_NAME}" >> $GITHUB_OUTPUT
+          echo "file_name=deces-${PREVIOUS_MONTH}.txt.gz" >> $GITHUB_OUTPUT
+          
+          echo "📅 Nous sommes en $(date +'%B %Y')"
+          echo "🔍 Recherche des données de: ${PREVIOUS_MONTH_NAME}"
+          echo "📄 Fichier recherché: deces-${PREVIOUS_MONTH}.txt.gz"
+      
+      - name: Check if already processed this month
+        id: check_processed
+        run: |
+          MARKER_FILE=".github/workflows/.last_processed_month"
+          
+          if [ -f "$MARKER_FILE" ]; then
+            LAST_PROCESSED=$(cat "$MARKER_FILE")
+            echo "last_processed=${LAST_PROCESSED}" >> $GITHUB_OUTPUT
+            
+            if [ "$LAST_PROCESSED" = "${{ steps.month.outputs.previous_month }}" ]; then
+              echo "already_processed=true" >> $GITHUB_OUTPUT
+              echo "✅ Mois ${{ steps.month.outputs.previous_month }} déjà traité"
+            else
+              echo "already_processed=false" >> $GITHUB_OUTPUT
+              echo "🔄 Nouveau mois détecté: ${{ steps.month.outputs.previous_month }}"
+            fi
+          else
+            echo "already_processed=false" >> $GITHUB_OUTPUT
+            echo "🆕 Premier run, aucun mois traité précédemment"
+          fi
+      
+      - name: Check file availability on data.gouv.fr
+        id: check_file
+        if: steps.check_processed.outputs.already_processed == 'false'
+        run: |
+          FILE_NAME="${{ steps.month.outputs.file_name }}"
+          
+          # Vérifier via l'API data.gouv.fr
+          DATASET_URL="https://www.data.gouv.fr/api/1/datasets/fichier-des-personnes-decedees"
+          
+          echo "🔍 Recherche du fichier: ${FILE_NAME}"
+          
+          # Récupérer la liste des ressources
+          RESPONSE=$(curl -s "$DATASET_URL")
+          
+          # Chercher le fichier dans les ressources
+          FILE_EXISTS=$(echo "$RESPONSE" | grep -o "\"title\":\"${FILE_NAME}\"" || echo "")
+          
+          if [ -n "$FILE_EXISTS" ]; then
+            echo "file_available=true" >> $GITHUB_OUTPUT
+            echo "✅ Fichier trouvé: ${FILE_NAME}"
+            
+            # Extraire l'URL du fichier
+            FILE_URL=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title==\"${FILE_NAME}\") | .url" | head -1)
+            echo "file_url=${FILE_URL}" >> $GITHUB_OUTPUT
+            echo "📥 URL: ${FILE_URL}"
+          else
+            echo "file_available=false" >> $GITHUB_OUTPUT
+            echo "⏳ Fichier pas encore disponible: ${FILE_NAME}"
+          fi
+      
+      - name: Download and verify file
+        id: download
+        if: steps.check_file.outputs.file_available == 'true'
+        run: |
+          FILE_NAME="${{ steps.month.outputs.file_name }}"
+          FILE_URL="${{ steps.check_file.outputs.file_url }}"
+          
+          echo "📥 Téléchargement de ${FILE_NAME}..."
+          
+          # Télécharger le fichier
+          if curl -f -L -o "/tmp/${FILE_NAME}" "$FILE_URL"; then
+            # Vérifier que c'est un fichier gzip valide
+            if gzip -t "/tmp/${FILE_NAME}" 2>/dev/null; then
+              # Compter les lignes
+              LINE_COUNT=$(zcat "/tmp/${FILE_NAME}" | wc -l)
+              echo "download_success=true" >> $GITHUB_OUTPUT
+              echo "line_count=${LINE_COUNT}" >> $GITHUB_OUTPUT
+              echo "✅ Téléchargement réussi: ${LINE_COUNT} lignes"
+            else
+              echo "download_success=false" >> $GITHUB_OUTPUT
+              echo "❌ Fichier corrompu"
+            fi
+          else
+            echo "download_success=false" >> $GITHUB_OUTPUT
+            echo "❌ Erreur de téléchargement"
+          fi
+      
+      - name: Mark month as processed
+        if: steps.download.outputs.download_success == 'true'
+        run: |
+          mkdir -p .github/workflows
+          echo "${{ steps.month.outputs.previous_month }}" > .github/workflows/.last_processed_month
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/.last_processed_month
+          git commit -m "📊 Nouveau mois traité: ${{ steps.month.outputs.previous_month }}"
+          git push
+      
+      - name: Send Discord notification
+        if: steps.download.outputs.download_success == 'true'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          FILE_NAME="${{ steps.month.outputs.file_name }}"
+          LINE_COUNT="${{ steps.download.outputs.line_count }}"
+          PREVIOUS_MONTH="${{ steps.month.outputs.previous_month }}"
+          PREVIOUS_MONTH_NAME="${{ steps.month.outputs.previous_month_name }}"
+          CURRENT_MONTH=$(date +'%B %Y')
+          
+          # Construire le payload JSON pour Discord
+          PAYLOAD=$(cat <<EOF
+          {
+            "content": "@here Nouveau fichier de décès disponible !",
+            "embeds": [{
+              "title": "🎉 Nouvelles données disponibles",
+              "description": "Les données de **${PREVIOUS_MONTH_NAME}** sont maintenant disponibles (nous sommes en ${CURRENT_MONTH}).",
+              "color": 3066993,
+              "fields": [
+                {
+                  "name": "📅 Mois des données",
+                  "value": "${PREVIOUS_MONTH_NAME}",
+                  "inline": true
+                },
+                {
+                  "name": "📄 Fichier",
+                  "value": "\`${FILE_NAME}\`",
+                  "inline": true
+                },
+                {
+                  "name": "📊 Nombre de décès",
+                  "value": "${LINE_COUNT}",
+                  "inline": true
+                },
+                {
+                  "name": "⏰ Détecté le",
+                  "value": "$(date +'%Y-%m-%d à %H:%M:%S UTC')",
+                  "inline": false
+                },
+                {
+                  "name": "🚀 Action à faire",
+                  "value": "Lancez le script \`./run-local-update.sh ${PREVIOUS_MONTH}\` sur votre serveur pour mettre à jour l'index Elasticsearch",
+                  "inline": false
+                }
+              ],
+              "footer": {
+                "text": "deces-dataprep • GitHub Actions"
+              },
+              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+            }]
+          }
+          EOF
+          )
+          
+          # Envoyer à Discord
+          curl -H "Content-Type: application/json" \
+               -d "$PAYLOAD" \
+               "$DISCORD_WEBHOOK"
+          
+          echo "✅ Notification Discord envoyée"
