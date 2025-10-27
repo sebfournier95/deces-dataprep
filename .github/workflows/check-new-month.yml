@@ -54,27 +54,56 @@ jobs:
           API_URL="https://www.data.gouv.fr/api/1/datasets/fichier-des-personnes-decedees"
           
           echo "🔍 Vérification via API data.gouv.fr..."
-          RESPONSE=$(curl -s "$API_URL")
+          echo "   URL: ${API_URL}"
+          
+          # Télécharger la réponse avec gestion d'erreur
+          RESPONSE=$(curl -s -w "\n%{http_code}" "$API_URL")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo "   HTTP Code: ${HTTP_CODE}"
+          
+          if [ "$HTTP_CODE" != "200" ]; then
+            echo "❌ Erreur API (HTTP ${HTTP_CODE})"
+            echo "available=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Vérifier que c'est du JSON valide
+          if ! echo "$BODY" | jq empty 2>/dev/null; then
+            echo "❌ Réponse API invalide (pas du JSON)"
+            echo "available=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "✅ API accessible, recherche du fichier..."
           
           # Chercher .txt
-          URL_TXT=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt\") | .url" | head -1)
+          URL_TXT=$(echo "$BODY" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt\") | .url" 2>/dev/null | head -1)
           
           # Chercher .txt.gz
-          URL_GZ=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt.gz\") | .url" | head -1)
+          URL_GZ=$(echo "$BODY" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt.gz\") | .url" 2>/dev/null | head -1)
           
           if [ -n "$URL_TXT" ] && [ "$URL_TXT" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_TXT}" >> $GITHUB_OUTPUT
             echo "file_type=txt" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt"
+            echo "   URL: ${URL_TXT}"
           elif [ -n "$URL_GZ" ] && [ "$URL_GZ" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_GZ}" >> $GITHUB_OUTPUT
             echo "file_type=txt.gz" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt.gz"
+            echo "   URL: ${URL_GZ}"
           else
             echo "available=false" >> $GITHUB_OUTPUT
-            echo "⏳ Pas encore disponible"
+            echo "⏳ Pas encore disponible: ${FILE_BASE}.txt / ${FILE_BASE}.txt.gz"
+            
+            # Debug: lister les 10 derniers fichiers deces
+            echo ""
+            echo "📋 Derniers fichiers disponibles:"
+            echo "$BODY" | jq -r '.resources[] | select(.title | startswith("deces-")) | .title' 2>/dev/null | sort -r | head -10
           fi
       
       - name: Get file info
@@ -83,13 +112,18 @@ jobs:
         run: |
           URL="${{ steps.check_file.outputs.file_url }}"
           
+          echo "📦 Récupération des informations du fichier..."
+          
           # Récupérer la taille
-          SIZE=$(curl -sI "$URL" | grep -i content-length | awk '{print $2}' | tr -d '\r')
-          if [ -n "$SIZE" ]; then
+          SIZE=$(curl -sI -L "$URL" | grep -i content-length | awk '{print $2}' | tr -d '\r' | head -1)
+          
+          if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ] 2>/dev/null; then
             SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
             echo "size=${SIZE_MB} MB" >> $GITHUB_OUTPUT
+            echo "   Taille: ${SIZE_MB} MB"
           else
             echo "size=N/A" >> $GITHUB_OUTPUT
+            echo "   Taille: Non disponible"
           fi
       
       - name: Mark as notified
@@ -121,11 +155,11 @@ jobs:
             "content": "@here 🎉 Nouveau fichier de décès disponible !",
             "embeds": [{
               "title": "📊 Nouvelles données disponibles",
-              "description": "Les données de **${MONTH_NAME}** sont disponibles sur data.gouv.fr",
+              "description": "Les données de **${MONTH_NAME}** sont disponibles sur data.gouv.fr (nous sommes en ${CURRENT})",
               "color": 3066993,
               "fields": [
                 {
-                  "name": "📅 Mois",
+                  "name": "📅 Mois des données",
                   "value": "${MONTH_NAME}",
                   "inline": true
                 },
@@ -140,21 +174,32 @@ jobs:
                   "inline": true
                 },
                 {
-                  "name": "🔗 URL",
-                  "value": "[Télécharger](${URL})",
+                  "name": "🔗 URL de téléchargement",
+                  "value": "[Cliquez ici](${URL})",
                   "inline": false
                 },
                 {
-                  "name": "🚀 Commande",
+                  "name": "🚀 Commande à exécuter",
                   "value": "\`\`\`bash\ncd /home/sebastien-fournier/Documents/VSCode/matchID-multirepo/deces-dataprep\n./run-local-update.sh ${MONTH}\n\`\`\`",
+                  "inline": false
+                },
+                {
+                  "name": "⏰ Détecté le",
+                  "value": "$(date +'%d/%m/%Y à %H:%M:%S UTC')",
                   "inline": false
                 }
               ],
+              "footer": {
+                "text": "deces-dataprep • Détection automatique"
+              },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
             }]
           }
           EOF
           )
           
-          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"
-          echo "✅ Notification envoyée"
+          if curl -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"; then
+            echo "✅ Notification Discord envoyée"
+          else
+            echo "⚠️ Échec de l'envoi Discord"
+          fi
