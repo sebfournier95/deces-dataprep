@@ -2,36 +2,35 @@ name: Check new month data availability
 
 on:
   schedule:
-    # 4 fois par jour: 00h, 6h, 12h, 18h
     - cron: "0 0,6,12,18 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - features/feature-discord-local-workflow
 
-  push:               
-      branches:
-        - features/feature-discord-local-workflow
-      
 jobs:
   check-availability:
     name: Check if previous month data is available
     runs-on: ubuntu-latest
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       
       - name: Calculate previous month
         id: month
         run: |
-          # Calculer le mois précédent (en octobre, on cherche septembre)
+          # Calculer le mois précédent
           PREVIOUS_MONTH=$(date -d "last month" +"%Y-m%m")
           PREVIOUS_MONTH_NAME=$(date -d "last month" +"%B %Y")
+          FILE_NAME="deces-${PREVIOUS_MONTH}.txt.gz"
           
           echo "previous_month=${PREVIOUS_MONTH}" >> $GITHUB_OUTPUT
           echo "previous_month_name=${PREVIOUS_MONTH_NAME}" >> $GITHUB_OUTPUT
-          echo "file_name=deces-${PREVIOUS_MONTH}.txt.gz" >> $GITHUB_OUTPUT
+          echo "file_name=${FILE_NAME}" >> $GITHUB_OUTPUT
           
           echo "📅 Nous sommes en $(date +'%B %Y')"
           echo "🔍 Recherche des données de: ${PREVIOUS_MONTH_NAME}"
-          echo "📄 Fichier recherché: deces-${PREVIOUS_MONTH}.txt.gz"
+          echo "📄 Fichier recherché: ${FILE_NAME}"
       
       - name: Check if already processed this month
         id: check_processed
@@ -54,65 +53,60 @@ jobs:
             echo "🆕 Premier run, aucun mois traité précédemment"
           fi
       
-      - name: Check file availability on data.gouv.fr
-        id: check_file
-        if: steps.check_processed.outputs.already_processed == 'false'
+      - name: Configure project
+        if: steps.check_processed.outputs.already_processed != 'true'
         run: |
-          FILE_NAME="${{ steps.month.outputs.file_name }}"
-          
-          # Vérifier via l'API data.gouv.fr
-          DATASET_URL="https://www.data.gouv.fr/api/1/datasets/fichier-des-personnes-decedees"
-          
-          echo "🔍 Recherche du fichier: ${FILE_NAME}"
-          
-          # Récupérer la liste des ressources
-          RESPONSE=$(curl -s "$DATASET_URL")
-          
-          # Chercher le fichier dans les ressources
-          FILE_EXISTS=$(echo "$RESPONSE" | grep -o "\"title\":\"${FILE_NAME}\"" || echo "")
-          
-          if [ -n "$FILE_EXISTS" ]; then
-            echo "file_available=true" >> $GITHUB_OUTPUT
-            echo "✅ Fichier trouvé: ${FILE_NAME}"
-            
-            # Extraire l'URL du fichier
-            FILE_URL=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title==\"${FILE_NAME}\") | .url" | head -1)
-            echo "file_url=${FILE_URL}" >> $GITHUB_OUTPUT
-            echo "📥 URL: ${FILE_URL}"
-          else
-            echo "file_available=false" >> $GITHUB_OUTPUT
-            echo "⏳ Fichier pas encore disponible: ${FILE_NAME}"
-          fi
+          echo "⚙️  Configuration du projet..."
+          make config
+        env:
+          GIT_ROOT: https://github.com/sebfournier95
+          DATAGOUV_CONNECTOR: upload
       
-      - name: Download and verify file
-        id: download
-        if: steps.check_file.outputs.file_available == 'true'
+      - name: Check file availability and download
+        id: check_file
+        if: steps.check_processed.outputs.already_processed != 'true'
         run: |
           FILE_NAME="${{ steps.month.outputs.file_name }}"
-          FILE_URL="${{ steps.check_file.outputs.file_url }}"
           
-          echo "📥 Téléchargement de ${FILE_NAME}..."
+          echo "🔍 Tentative de téléchargement de ${FILE_NAME}..."
           
-          # Télécharger le fichier
-          if curl -f -L -o "/tmp/${FILE_NAME}" "$FILE_URL"; then
-            # Vérifier que c'est un fichier gzip valide
-            if gzip -t "/tmp/${FILE_NAME}" 2>/dev/null; then
+          # Utiliser make datagouv-to-upload pour télécharger le fichier
+          if make datagouv-to-upload FILES_TO_PROCESS="${FILE_NAME}"; then
+            # Vérifier si le fichier a été téléchargé
+            UPLOAD_DIR="backend/upload"
+            
+            if [ -f "${UPLOAD_DIR}/${FILE_NAME}" ]; then
+              echo "file_available=true" >> $GITHUB_OUTPUT
+              echo "✅ Fichier téléchargé avec succès: ${FILE_NAME}"
+              
               # Compter les lignes
-              LINE_COUNT=$(zcat "/tmp/${FILE_NAME}" | wc -l)
-              echo "download_success=true" >> $GITHUB_OUTPUT
+              LINE_COUNT=$(zcat "${UPLOAD_DIR}/${FILE_NAME}" | wc -l)
+              FILE_SIZE=$(du -h "${UPLOAD_DIR}/${FILE_NAME}" | awk '{print $1}')
+              
               echo "line_count=${LINE_COUNT}" >> $GITHUB_OUTPUT
-              echo "✅ Téléchargement réussi: ${LINE_COUNT} lignes"
+              echo "file_size=${FILE_SIZE}" >> $GITHUB_OUTPUT
+              
+              echo "📊 Statistiques:"
+              echo "   Lignes: ${LINE_COUNT}"
+              echo "   Taille: ${FILE_SIZE}"
             else
-              echo "download_success=false" >> $GITHUB_OUTPUT
-              echo "❌ Fichier corrompu"
+              echo "file_available=false" >> $GITHUB_OUTPUT
+              echo "⏳ Fichier pas encore disponible: ${FILE_NAME}"
+              
+              # Lister les fichiers téléchargés pour debug
+              echo ""
+              echo "📋 Fichiers dans ${UPLOAD_DIR}:"
+              ls -lh "${UPLOAD_DIR}/" 2>/dev/null | grep "deces-" || echo "Aucun fichier deces trouvé"
             fi
           else
-            echo "download_success=false" >> $GITHUB_OUTPUT
-            echo "❌ Erreur de téléchargement"
+            echo "file_available=false" >> $GITHUB_OUTPUT
+            echo "❌ Échec du téléchargement via make datagouv-to-upload"
           fi
+        env:
+          DATAGOUV_CONNECTOR: upload
       
       - name: Mark month as processed
-        if: steps.download.outputs.download_success == 'true'
+        if: steps.check_file.outputs.file_available == 'true'
         run: |
           mkdir -p .github/workflows
           echo "${{ steps.month.outputs.previous_month }}" > .github/workflows/.last_processed_month
@@ -124,15 +118,19 @@ jobs:
           git push
       
       - name: Send Discord notification
-        if: steps.download.outputs.download_success == 'true'
+        if: steps.check_file.outputs.file_available == 'true'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           FILE_NAME="${{ steps.month.outputs.file_name }}"
-          LINE_COUNT="${{ steps.download.outputs.line_count }}"
+          LINE_COUNT="${{ steps.check_file.outputs.line_count }}"
+          FILE_SIZE="${{ steps.check_file.outputs.file_size }}"
           PREVIOUS_MONTH="${{ steps.month.outputs.previous_month }}"
           PREVIOUS_MONTH_NAME="${{ steps.month.outputs.previous_month_name }}"
           CURRENT_MONTH=$(date +'%B %Y')
+          
+          # Formater le nombre avec des espaces
+          LINE_COUNT_FORMATTED=$(printf '%s' ${LINE_COUNT} | sed ':a;s/\B[0-9]\{3\}\>/\ &/;ta')
           
           # Construire le payload JSON pour Discord
           PAYLOAD=$(cat <<EOF
@@ -155,22 +153,32 @@ jobs:
                 },
                 {
                   "name": "📊 Nombre de décès",
-                  "value": "${LINE_COUNT}",
+                  "value": "${LINE_COUNT_FORMATTED}",
+                  "inline": true
+                },
+                {
+                  "name": "💾 Taille",
+                  "value": "${FILE_SIZE}",
                   "inline": true
                 },
                 {
                   "name": "⏰ Détecté le",
-                  "value": "$(date +'%Y-%m-%d à %H:%M:%S UTC')",
-                  "inline": false
+                  "value": "$(date +'%d/%m/%Y à %H:%M:%S UTC')",
+                  "inline": true
                 },
                 {
-                  "name": "🚀 Action à faire",
-                  "value": "Lancez le script \`./run-local-update.sh ${PREVIOUS_MONTH}\` sur votre serveur pour mettre à jour l'index Elasticsearch",
+                  "name": "📦 Bucket",
+                  "value": "data.gouv.fr",
+                  "inline": true
+                },
+                {
+                  "name": "🚀 Commande à exécuter",
+                  "value": "\`\`\`bash\n./run-local-update.sh ${PREVIOUS_MONTH}\n\`\`\`",
                   "inline": false
                 }
               ],
               "footer": {
-                "text": "deces-dataprep • GitHub Actions"
+                "text": "deces-dataprep • Détection automatique"
               },
               "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
             }]
@@ -179,8 +187,8 @@ jobs:
           )
           
           # Envoyer à Discord
-          curl -H "Content-Type: application/json" \
-               -d "$PAYLOAD" \
-               "$DISCORD_WEBHOOK"
-          
-          echo "✅ Notification Discord envoyée"
+          if curl -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"; then
+            echo "✅ Notification Discord envoyée"
+          else
+            echo "⚠️ Échec de l'envoi de la notification Discord"
+          fi
