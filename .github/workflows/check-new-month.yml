@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - features/feature-discord-local-workflow
+      - master-local
 
 jobs:
   check-availability:
@@ -134,7 +135,7 @@ jobs:
                 {"name": "📄 Fichier", "value": "`'"${FILE}"'`", "inline": true},
                 {"name": "💾 Taille", "value": "'"${SIZE}"'", "inline": true},
                 {"name": "🔗 URL", "value": "[Télécharger]('"${URL}"')", "inline": false},
-                {"name": "🚀 Commande", "value": "```bash\n./run-local-update.sh '"${MONTH}"'\n```", "inline": false}
+                {"name": "🚀 Commande", "value": "```bash\n./run-local-ES-update.sh \n```", "inline": false}
               ]
             }]
           }' "$DISCORD_WEBHOOK"
