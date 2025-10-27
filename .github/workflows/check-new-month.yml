@@ -6,6 +6,10 @@ on:
     - cron: "0 0,6,12,18 * * *"
   workflow_dispatch:
 
+  push:               
+      branches:
+        - features/feature-discord-local-workflow
+      
 jobs:
   check-availability:
     name: Check if previous month data is available
