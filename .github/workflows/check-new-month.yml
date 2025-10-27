@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - features/feature-discord-local-workflow
-      - master-local
-
+      - tmp
 jobs:
   check-availability:
     name: Check if previous month data is available
@@ -16,6 +14,13 @@ jobs:
     
     steps:
       - uses: actions/checkout@v3
+      
+      - name: Download previous state
+        uses: actions/download-artifact@v3
+        continue-on-error: true
+        with:
+          name: last-processed-month
+          path: .
       
       - name: Calculate previous month
         id: month
@@ -34,10 +39,10 @@ jobs:
       - name: Check if already notified
         id: check_notified
         run: |
-          MARKER_FILE=".last_processed_month"
-          
-          if [ -f "$MARKER_FILE" ]; then
-            LAST_NOTIFIED=$(cat "$MARKER_FILE")
+          if [ -f ".last_processed_month" ]; then
+            LAST_NOTIFIED=$(cat ".last_processed_month")
+            echo "Dernier mois traité: ${LAST_NOTIFIED}"
+            
             if [ "$LAST_NOTIFIED" = "${{ steps.month.outputs.previous_month }}" ]; then
               echo "already_notified=true" >> $GITHUB_OUTPUT
               echo "✅ Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
@@ -46,6 +51,7 @@ jobs:
           fi
           
           echo "already_notified=false" >> $GITHUB_OUTPUT
+          echo "🔄 Nouveau mois à vérifier"
       
       - name: Check file on data.gouv.fr
         id: check_file
@@ -102,16 +108,19 @@ jobs:
             echo "size=N/A" >> $GITHUB_OUTPUT
           fi
       
-      - name: Mark as notified
+      - name: Save state
         if: steps.check_file.outputs.available == 'true'
         run: |
           echo "${{ steps.month.outputs.previous_month }}" > .last_processed_month
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .last_processed_month
-          git commit -m "📊 Nouveau mois: ${{ steps.month.outputs.previous_month }}"
-          git push
+          echo "✅ État sauvegardé"
+      
+      - name: Upload state
+        if: steps.check_file.outputs.available == 'true'
+        uses: actions/upload-artifact@v3
+        with:
+          name: last-processed-month
+          path: .last_processed_month
+          retention-days: 90
       
       - name: Send Discord notification
         if: steps.check_file.outputs.available == 'true'
@@ -125,10 +134,10 @@ jobs:
           SIZE="${{ steps.file_info.outputs.size }}"
           
           curl -H "Content-Type: application/json" -d '{
-            "content": "@here 🎉 Nouveau fichier disponible !",
+            "content": "@here 🎉 Nouveau fichier de décès disponible !",
             "embeds": [{
-              "title": "📊 Nouvelles données",
-              "description": "Données de **'"${MONTH_NAME}"'** disponibles",
+              "title": "📊 Nouvelles données disponibles",
+              "description": "Les données de **'"${MONTH_NAME}"'** sont disponibles",
               "color": 3066993,
               "fields": [
                 {"name": "📅 Mois", "value": "'"${MONTH_NAME}"'", "inline": true},
@@ -139,3 +148,5 @@ jobs:
               ]
             }]
           }' "$DISCORD_WEBHOOK"
+          
+          echo "✅ Notification Discord envoyée"
