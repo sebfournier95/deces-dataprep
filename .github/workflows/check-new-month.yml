@@ -33,7 +33,7 @@ jobs:
       - name: Check if already notified
         id: check_notified
         run: |
-          MARKER_FILE=".github/workflows/.last_processed_month"
+          MARKER_FILE=".last_processed_month"
           
           if [ -f "$MARKER_FILE" ]; then
             LAST_NOTIFIED=$(cat "$MARKER_FILE")
@@ -55,48 +55,36 @@ jobs:
           
           echo "🔍 Vérification via API data.gouv.fr..."
           
-          # Suivre les redirections avec -L
           RESPONSE=$(curl -sL "$API_URL")
           
           if [ $? -ne 0 ]; then
-            echo "❌ Erreur lors de l'appel à l'API"
+            echo "❌ Erreur API"
             echo "available=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          # Vérifier que c'est du JSON valide
           if ! echo "$RESPONSE" | jq empty 2>/dev/null; then
-            echo "❌ Réponse API invalide (pas du JSON)"
+            echo "❌ Réponse invalide"
             echo "available=false" >> $GITHUB_OUTPUT
             exit 0
           fi
           
-          echo "✅ API accessible, recherche du fichier..."
+          echo "✅ API accessible"
           
-          # Chercher .txt
           URL_TXT=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt\") | .url" 2>/dev/null | head -1)
-          
-          # Chercher .txt.gz
           URL_GZ=$(echo "$RESPONSE" | jq -r ".resources[] | select(.title == \"${FILE_BASE}.txt.gz\") | .url" 2>/dev/null | head -1)
           
           if [ -n "$URL_TXT" ] && [ "$URL_TXT" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_TXT}" >> $GITHUB_OUTPUT
-            echo "file_type=txt" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt"
           elif [ -n "$URL_GZ" ] && [ "$URL_GZ" != "null" ]; then
             echo "available=true" >> $GITHUB_OUTPUT
             echo "file_url=${URL_GZ}" >> $GITHUB_OUTPUT
-            echo "file_type=txt.gz" >> $GITHUB_OUTPUT
             echo "✅ Fichier trouvé: ${FILE_BASE}.txt.gz"
           else
             echo "available=false" >> $GITHUB_OUTPUT
-            echo "⏳ Pas encore disponible: ${FILE_BASE}.txt / ${FILE_BASE}.txt.gz"
-            
-            # Debug: lister les derniers fichiers
-            echo ""
-            echo "📋 Les 10 derniers fichiers 'deces' disponibles:"
-            echo "$RESPONSE" | jq -r '.resources[] | select(.title | startswith("deces-")) | .title' 2>/dev/null | sort -r | head -10
+            echo "⏳ Pas encore disponible"
           fi
       
       - name: Get file info
@@ -104,31 +92,24 @@ jobs:
         if: steps.check_file.outputs.available == 'true'
         run: |
           URL="${{ steps.check_file.outputs.file_url }}"
-          
-          echo "📦 Récupération des informations du fichier..."
-          
-          # Récupérer la taille (suivre les redirections)
           SIZE=$(curl -sIL "$URL" | grep -i content-length | awk '{print $2}' | tr -d '\r' | tail -1)
           
           if [ -n "$SIZE" ] && [ "$SIZE" -gt 0 ] 2>/dev/null; then
             SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
             echo "size=${SIZE_MB} MB" >> $GITHUB_OUTPUT
-            echo "   Taille: ${SIZE_MB} MB"
           else
             echo "size=N/A" >> $GITHUB_OUTPUT
-            echo "   Taille: Non disponible"
           fi
       
       - name: Mark as notified
         if: steps.check_file.outputs.available == 'true'
         run: |
-          mkdir -p .github/workflows
-          echo "${{ steps.month.outputs.previous_month }}" > .github/workflows/.last_processed_month
+          echo "${{ steps.month.outputs.previous_month }}" > .last_processed_month
           
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/.last_processed_month
-          git commit -m "📊 Nouveau mois détecté: ${{ steps.month.outputs.previous_month }}"
+          git add .last_processed_month
+          git commit -m "📊 Nouveau mois: ${{ steps.month.outputs.previous_month }}"
           git push
       
       - name: Send Discord notification
@@ -141,58 +122,19 @@ jobs:
           FILE="${{ steps.month.outputs.file_name }}"
           URL="${{ steps.check_file.outputs.file_url }}"
           SIZE="${{ steps.file_info.outputs.size }}"
-          CURRENT=$(date +'%B %Y')
           
-          PAYLOAD=$(cat <<EOF
-          {
-            "content": "@here 🎉 Nouveau fichier de décès disponible !",
+          curl -H "Content-Type: application/json" -d '{
+            "content": "@here 🎉 Nouveau fichier disponible !",
             "embeds": [{
-              "title": "📊 Nouvelles données disponibles",
-              "description": "Les données de **${MONTH_NAME}** sont disponibles sur data.gouv.fr (nous sommes en ${CURRENT})",
+              "title": "📊 Nouvelles données",
+              "description": "Données de **'"${MONTH_NAME}"'** disponibles",
               "color": 3066993,
               "fields": [
-                {
-                  "name": "📅 Mois des données",
-                  "value": "${MONTH_NAME}",
-                  "inline": true
-                },
-                {
-                  "name": "📄 Fichier",
-                  "value": "\`${FILE}\`",
-                  "inline": true
-                },
-                {
-                  "name": "💾 Taille",
-                  "value": "${SIZE}",
-                  "inline": true
-                },
-                {
-                  "name": "🔗 URL de téléchargement",
-                  "value": "[Cliquez ici](${URL})",
-                  "inline": false
-                },
-                {
-                  "name": "🚀 Commande à exécuter",
-                  "value": "\`\`\`bash\ncd /home/sebastien-fournier/Documents/VSCode/matchID-multirepo/deces-dataprep\n./run-local-update.sh ${MONTH}\n\`\`\`",
-                  "inline": false
-                },
-                {
-                  "name": "⏰ Détecté le",
-                  "value": "$(date +'%d/%m/%Y à %H:%M:%S UTC')",
-                  "inline": false
-                }
-              ],
-              "footer": {
-                "text": "deces-dataprep • Détection automatique"
-              },
-              "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+                {"name": "📅 Mois", "value": "'"${MONTH_NAME}"'", "inline": true},
+                {"name": "📄 Fichier", "value": "`'"${FILE}"'`", "inline": true},
+                {"name": "💾 Taille", "value": "'"${SIZE}"'", "inline": true},
+                {"name": "🔗 URL", "value": "[Télécharger]('"${URL}"')", "inline": false},
+                {"name": "🚀 Commande", "value": "```bash\n./run-local-update.sh '"${MONTH}"'\n```", "inline": false}
+              ]
             }]
-          }
-          EOF
-          )
-          
-          if curl -H "Content-Type: application/json" -d "$PAYLOAD" "$DISCORD_WEBHOOK"; then
-            echo "✅ Notification Discord envoyée"
-          else
-            echo "⚠️ Échec de l'envoi Discord"
-          fi
+          }' "$DISCORD_WEBHOOK"
