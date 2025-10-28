@@ -1,0 +1,146 @@
+name: Sync Upstream
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - master-local
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v3
+        with:
+          ref: master-local
+          fetch-depth: 0
+
+      - name: Récupérer infos upstream
+        id: upstream
+        run: |
+          UPSTREAM_SHA=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/matchID-project/deces-dataprep/commits/dev" \
+            | jq -r '.sha')
+          
+          LATEST_RELEASE=$(curl -s \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/matchID-project/deces-dataprep/releases/latest" \
+            | jq -r '.tag_name')
+          
+          echo "upstream_sha=$UPSTREAM_SHA" >> $GITHUB_OUTPUT
+          echo "latest_release=$LATEST_RELEASE" >> $GITHUB_OUTPUT
+
+      - name: Comparer avec cache
+        id: compare
+        run: |
+          mkdir -p .github/upstream_cache
+          CACHED_SHA=$(cat .github/upstream_cache/last_sha.txt 2>/dev/null || echo "")
+          CACHED_RELEASE=$(cat .github/upstream_cache/last_release.txt 2>/dev/null || echo "")
+          
+          if [ "$CACHED_SHA" != "${{ steps.upstream.outputs.upstream_sha }}" ]; then
+            echo "commit_changed=true" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ "$CACHED_RELEASE" != "${{ steps.upstream.outputs.latest_release }}" ]; then
+            echo "release_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Notifier Discord - Nouveau Commit
+        if: steps.compare.outputs.commit_changed == 'true'
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "username": "matchID deces-dataprep Sync",
+              "avatar_url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+              "embeds": [{
+                "title": "🔄 Nouveau commit détecté",
+                "description": "Le repository upstream a été mis à jour",
+                "color": 3447003,
+                "fields": [{
+                  "name": "Repository",
+                  "value": "matchID-project/deces-dataprep",
+                  "inline": true
+                }, {
+                  "name": "Commit SHA",
+                  "value": "`'"${{ steps.upstream.outputs.upstream_sha }}"'`",
+                  "inline": false
+                }],
+                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+              }]
+            }'
+
+      - name: Notifier Discord - Nouvelle Release
+        if: steps.compare.outputs.release_changed == 'true'
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "username": "matchID deces-dataprep Sync",
+              "embeds": [{
+                "title": "🎉 Nouvelle release",
+                "description": "**${{ steps.upstream.outputs.latest_release }}**",
+                "color": 5763719,
+                "fields": [{
+                  "name": "Lien",
+                  "value": "[Voir](https://github.com/matchID-project/deces-dataprep/releases/tag/${{ steps.upstream.outputs.latest_release }})"
+                }],
+                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+              }]
+            }'
+
+      - name: Synchroniser fork
+        if: steps.compare.outputs.commit_changed == 'true'
+        run: |
+          git remote add upstream https://github.com/matchID-project/deces-dataprep.git || true
+          git fetch origin dev:dev
+          git checkout -B dev origin/dev
+          git merge upstream/dev --no-edit
+          git push origin dev
+
+      - name: Notifier Discord - Succès
+        if: success() && (steps.compare.outputs.commit_changed == 'true' || steps.compare.outputs.release_changed == 'true')
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "username": "matchID deces-dataprep Sync",
+              "embeds": [{
+                "title": "✅ Synchronisation réussie",
+                "color": 5763719,
+                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+              }]
+            }'
+
+      - name: Notifier Discord - Erreur
+        if: failure()
+        run: |
+          curl -X POST "${{ secrets.DISCORD_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "username": "matchID deces-dataprep Sync",
+              "embeds": [{
+                "title": "❌ Erreur de synchronisation",
+                "color": 15158332,
+                "fields": [{
+                  "name": "Logs",
+                  "value": "[Détails](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+                }],
+                "timestamp": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"
+              }]
+            }'
+
+      - name: Mettre à jour cache
+        if: steps.compare.outputs.commit_changed == 'true' || steps.compare.outputs.release_changed == 'true'
+        run: |
+          git checkout master-local
+          echo "${{ steps.upstream.outputs.upstream_sha }}" > .github/upstream_cache/last_sha.txt
+          echo "${{ steps.upstream.outputs.latest_release }}" > .github/upstream_cache/last_release.txt
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git add .github/upstream_cache/
+          git commit -m "chore: update upstream cache [skip ci]" || true
+          git push origin master-local
