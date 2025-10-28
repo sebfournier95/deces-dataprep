@@ -96,6 +96,7 @@ jobs:
         if: steps.compare.outputs.commit_changed == 'true'
         run: |
           git remote add upstream https://github.com/matchID-project/deces-dataprep.git || true
+          git fetch upstream
           git fetch origin dev:dev
           git checkout -B dev origin/dev
           git merge upstream/dev --no-edit
