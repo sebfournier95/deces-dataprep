@@ -141,7 +141,7 @@ jobs:
           CURRENT=$(date +'%B %Y')
           
           curl -H "Content-Type: application/json" -d '{
-            "content": "@here 🎉 Nouveau fichier de décès disponible !",
+            "content": "🎉 Nouveau fichier de décès disponible !",
             "embeds": [{
               "title": "📊 Nouvelles données disponibles",
               "description": "Les données de **'"${MONTH_NAME}"'** sont disponibles sur data.gouv.fr (nous sommes en '"${CURRENT}"')",
