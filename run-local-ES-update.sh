@@ -13,4 +13,10 @@ make datagouv-to-upload
 make recipe-run
 make watch-run
 
-#make backup
+make backup-dir
+make backup
+
+cp -r ./backend/upload ../backup/
+
+rm -rf ../backup/backup
+cp -r ./backend/backup ../backup/
