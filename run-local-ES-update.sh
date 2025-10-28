@@ -5,6 +5,12 @@ sudo apt-get update -y && sudo apt-get install make
 make clean
 make config
 
+# Charger les variables depuis le fichier artifacts (après make config)
+if [ -f "artifacts" ]; then
+    # Convertir les exports Make en exports Bash
+    source <(grep "^export" artifacts | sed 's/export /export /')
+fi
+
 # Vérifier que le webhook Discord est configuré
 if [ -z "$DISCORD_WEBHOOK_URL" ]; then
     echo "⚠️  DISCORD_WEBHOOK_URL n'est pas définie. Les notifications Discord seront ignorées."

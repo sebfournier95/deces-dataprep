@@ -152,7 +152,7 @@ jobs:
                 {"name": "💾 Taille", "value": "'"${SIZE}"'", "inline": true},
                 {"name": "⏰ Détecté le", "value": "'"$(date +'%d/%m/%Y à %H:%M:%S UTC')"'", "inline": true},
                 {"name": "🔗 URL de téléchargement", "value": "[Cliquez ici]('"${URL}"')", "inline": false},
-                {"name": "🚀 Commande à exécuter", "value": "```bash\ncd ./run-local-ES-update.sh \n```", "inline": false}
+                {"name": "🚀 Commande à exécuter", "value": "```bash\nsudo ./run-local-ES-update.sh \n```", "inline": false}
               ],
               "footer": {
                 "text": "deces-dataprep • Détection automatique"
