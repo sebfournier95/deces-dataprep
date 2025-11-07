@@ -16,12 +16,12 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
-      - name: Download previous state
-        uses: actions/download-artifact@v4
-        continue-on-error: true
+      - name: Restore previous state from cache
+        uses: actions/cache/restore@v4
+        id: cache-restore
         with:
-          name: last-processed-month
-          path: .
+          path: .last_processed_month
+          key: last-processed-month-state
       
       - name: Calculate previous month
         id: month
@@ -120,13 +120,12 @@ jobs:
           echo "${{ steps.month.outputs.previous_month }}" > .last_processed_month
           echo "✅ État sauvegardé: ${{ steps.month.outputs.previous_month }}"
       
-      - name: Upload state
+      - name: Save state to cache
         if: steps.check_file.outputs.available == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/cache/save@v4
         with:
-          name: last-processed-month
           path: .last_processed_month
-          retention-days: 90
+          key: last-processed-month-state
       
       - name: Send Discord notification
         if: steps.check_file.outputs.available == 'true'
