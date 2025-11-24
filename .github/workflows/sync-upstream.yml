@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - master-local
+      - master
 
 jobs:
   check-upstream:
@@ -14,7 +14,7 @@ jobs:
       - name: Checkout fork
         uses: actions/checkout@v3
         with:
-          ref: master-local
+          ref: master
           fetch-depth: 0
 
       - name: Récupérer infos upstream
@@ -97,10 +97,10 @@ jobs:
         run: |
           git remote add upstream https://github.com/matchID-project/deces-dataprep.git || true
           git fetch upstream
-          git fetch origin dev:dev
-          git checkout -B dev origin/dev
+          git fetch origin fork-dev:fork-dev
+          git checkout -B fork-dev origin/fork-dev
           git merge upstream/dev --no-edit
-          git push origin dev
+          git push origin fork-dev
 
       - name: Notifier Discord - Succès
         if: success() && (steps.compare.outputs.commit_changed == 'true' || steps.compare.outputs.release_changed == 'true')
@@ -137,11 +137,11 @@ jobs:
       - name: Mettre à jour cache
         if: steps.compare.outputs.commit_changed == 'true' || steps.compare.outputs.release_changed == 'true'
         run: |
-          git checkout master-local
+          git checkout master
           echo "${{ steps.upstream.outputs.upstream_sha }}" > .github/upstream_cache/last_sha.txt
           echo "${{ steps.upstream.outputs.latest_release }}" > .github/upstream_cache/last_release.txt
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
           git add .github/upstream_cache/
           git commit -m "chore: update upstream cache [skip ci]" || true
-          git push origin master-local
+          git push origin master
