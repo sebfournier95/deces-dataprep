@@ -127,11 +127,13 @@ run_data_processing() {
     
     echo "    -> Synchronisation de '$UPLOAD_SOURCE_DIR' vers '$BACKEND_UPLOAD_DIR'..."
     cp -r "$UPLOAD_SOURCE_DIR" "$BACKEND_UPLOAD_DIR"
+    echo "    -> Suppression des fichiers temporaires et inutiles..."
+    find "$BACKEND_UPLOAD_DIR" -type f \( -name "fichier-*" -o -name "tmp*" \) -delete
     echo "    -> Copie terminée."
 
     echo "🚚 Transfert des données de datagouv vers l'upload..."
     make datagouv-to-upload
-    
+    existe 0
     echo "🍳 Exécution de la recette de préparation des données..."
     make recipe-run
     make watch-run
@@ -181,7 +183,11 @@ create_backups() {
     echo "🔄 Synchronisation des backups..."
     
     # Copie de l'upload mis à jour
+    echo "    -> Nettoyage de l'ancien répertoire upload..."
+    rm -rf "${BACKUP_DEST_DIR}/upload"
     echo "    -> Copie de l'upload mis à jour..."
+    cp -r "$BACKEND_UPLOAD_DIR" "$BACKUP_DEST_DIR"
+
     cp -r "$BACKEND_UPLOAD_DIR" "$BACKUP_DEST_DIR"
     
     # Créer le répertoire backup de destination s'il n'existe pas
@@ -245,7 +251,7 @@ main() {
     sudo apt-get update -y && sudo apt-get install make -y
 
     echo "⚙️  Configuration du projet..."
-    #make clean
+    make clean
     make config
 
     load_environment_variables
