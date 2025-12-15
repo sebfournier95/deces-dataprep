@@ -8,6 +8,10 @@ on:
     branches:
       - master
 
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
   check-availability:
     name: Check if previous month data is available
@@ -21,7 +25,7 @@ jobs:
         id: cache-restore
         with:
           path: .last_processed_month
-          key: last-processed-month-state
+          key: last-processed-month-${{ steps.month.outputs.previous_month }}
       
       - name: Calculate previous month
         id: month
@@ -40,17 +44,24 @@ jobs:
       - name: Check if already notified
         id: check_notified
         run: |
+          if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
+            echo "already_notified=true" >> $GITHUB_OUTPUT
+            echo "✅ Cache hit: Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
+            exit 0
+          fi
+
+          # Fallback if cache was not hit, but file might exist from a previous run (e.g., if cache was evicted or not saved)
           if [ -f ".last_processed_month" ]; then
             LAST_NOTIFIED=$(cat ".last_processed_month")
-            echo "Dernier mois traité: ${LAST_NOTIFIED}"
-            
+            echo "Dernier mois traité (fichier local): ${LAST_NOTIFIED}"
+
             if [ "$LAST_NOTIFIED" = "${{ steps.month.outputs.previous_month }}" ]; then
               echo "already_notified=true" >> $GITHUB_OUTPUT
-              echo "✅ Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
+              echo "✅ Fichier local: Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
               exit 0
             fi
           fi
-          
+
           echo "already_notified=false" >> $GITHUB_OUTPUT
           echo "🔄 Nouveau mois à vérifier"
       
@@ -114,18 +125,13 @@ jobs:
             echo "size=N/A" >> $GITHUB_OUTPUT
           fi
       
-      - name: Save state
-        if: steps.check_file.outputs.available == 'true'
-        run: |
-          echo "${{ steps.month.outputs.previous_month }}" > .last_processed_month
-          echo "✅ État sauvegardé: ${{ steps.month.outputs.previous_month }}"
       
       - name: Save state to cache
-        if: steps.check_file.outputs.available == 'true'
+        if: steps.check_file.outputs.available == 'true' && steps.cache-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: .last_processed_month
-          key: last-processed-month-state
+          key: last-processed-month-${{ steps.month.outputs.previous_month }}
       
       - name: Send Discord notification
         if: steps.check_file.outputs.available == 'true'
