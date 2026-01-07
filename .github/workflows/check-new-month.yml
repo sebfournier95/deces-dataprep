@@ -134,7 +134,7 @@ jobs:
           key: last-processed-month-${{ steps.month.outputs.previous_month }}
       
       - name: Send Discord notification
-        if: steps.check_file.outputs.available == 'true'
+        if: steps.check_file.outputs.available == 'true' && steps.check_notified.outputs.already_notified != 'true'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
