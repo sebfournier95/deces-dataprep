@@ -20,13 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       
-      - name: Restore previous state from cache
-        uses: actions/cache/restore@v4
-        id: cache-restore
-        with:
-          path: .last_processed_month
-          key: last-processed-month-${{ steps.month.outputs.previous_month }}
-      
       - name: Calculate previous month
         id: month
         run: |
@@ -40,6 +33,14 @@ jobs:
           
           echo "📅 Nous sommes en $(date +'%B %Y')"
           echo "🔍 Recherche des données de: ${PREVIOUS_MONTH_NAME}"
+      
+      - name: Restore previous state from cache
+        uses: actions/cache/restore@v4
+        id: cache-restore
+        with:
+          path: .last_processed_month
+          key: last-processed-month-${{ steps.month.outputs.previous_month }}
+      
       
       - name: Check if already notified
         id: check_notified
