@@ -44,26 +44,34 @@ jobs:
       - name: Check if already notified
         id: check_notified
         run: |
+          echo "DEBUG: cache-hit = ${{ steps.cache-restore.outputs.cache-hit }}"
+          echo "DEBUG: previous_month = ${{ steps.month.outputs.previous_month }}"
+
+          ALREADY_NOTIFIED_FLAG="false"
+
           if [ "${{ steps.cache-restore.outputs.cache-hit }}" = "true" ]; then
-            echo "already_notified=true" >> $GITHUB_OUTPUT
+            ALREADY_NOTIFIED_FLAG="true"
             echo "✅ Cache hit: Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
-            exit 0
-          fi
+          else
+            # Fallback if cache was not hit, but file might exist from a previous run (e.g., if cache was evicted or not saved)
+            if [ -f ".last_processed_month" ]; then
+              LAST_NOTIFIED=$(cat ".last_processed_month")
+              echo "DEBUG: LAST_NOTIFIED (from file) = ${LAST_NOTIFIED}"
+              echo "Dernier mois traité (fichier local): ${LAST_NOTIFIED}"
 
-          # Fallback if cache was not hit, but file might exist from a previous run (e.g., if cache was evicted or not saved)
-          if [ -f ".last_processed_month" ]; then
-            LAST_NOTIFIED=$(cat ".last_processed_month")
-            echo "Dernier mois traité (fichier local): ${LAST_NOTIFIED}"
-
-            if [ "$LAST_NOTIFIED" = "${{ steps.month.outputs.previous_month }}" ]; then
-              echo "already_notified=true" >> $GITHUB_OUTPUT
-              echo "✅ Fichier local: Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
-              exit 0
+              if [ "$LAST_NOTIFIED" = "${{ steps.month.outputs.previous_month }}" ]; then
+                ALREADY_NOTIFIED_FLAG="true"
+                echo "✅ Fichier local: Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
+              fi
             fi
           fi
 
-          echo "already_notified=false" >> $GITHUB_OUTPUT
-          echo "🔄 Nouveau mois à vérifier"
+          echo "already_notified=${ALREADY_NOTIFIED_FLAG}" >> $GITHUB_OUTPUT
+          if [ "$ALREADY_NOTIFIED_FLAG" = "true" ]; then
+            echo "✅ Déjà notifié pour ${{ steps.month.outputs.previous_month }}"
+          else
+            echo "🔄 Nouveau mois à vérifier"
+          fi
       
       - name: Check file on data.gouv.fr
         id: check_file
